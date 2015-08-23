@@ -1,0 +1,131 @@
+---
+title: "Practical Machine Learning Assignment"
+author: "Jacob Schwan"
+date: "8/22/2015"
+output: html_document
+---
+
+```{r SetOptions, include=FALSE}
+knitr::opts_chunk$set(message=FALSE)
+```
+
+#Executive Summary
+This report will produce a model, using data provided by 
+[Groupware@Les](http://groupware.les.inf.puc-rio.br/har), to predict the
+technique used during dumbbell exercise. The study used 4 sets of sensors to
+collect gyroscopic data on from the dumbell, foreare, bicep, and abdomin of the
+participant.  5 techniques were perfomed by each participant, 1 correct and 4 
+incorrect.
+
+The random forrest technique will be used to produce a model with a high level
+of accuracy.  The results of the model will be tested on a portion of the
+provided training set to estimate out of sample error.  Finally the model will
+be used to predict the technique used for each of the 20 cases in the provided
+testing data set.
+
+##Data Import & Cleaning
+```{r GetData, cache=T}
+if (!file.exists("pml-training.csv")) {
+download.file(
+    url="https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+    "pml-training.csv")
+}
+pmltraining <- read.csv("pml-training.csv", row.names=1, na.strings="#DIV/0!")
+for (i in 7:158) {
+    pmltraining[,i] <- as.numeric(pmltraining[,i])
+}
+```
+
+##Divide Data into Training & Test Set
+The provided training data is divided into a training & test set in order to 
+later estimate the out of sample error rate.
+
+```{r DataSets}
+set.seed(11885)
+library(caret)
+inTrain <- createDataPartition(pmltraining$classe,p=0.8,list = F)
+training <- pmltraining[inTrain,]
+testing <- pmltraining[-inTrain,]
+```
+
+##Predictor Variable Selection
+Many of the variable in the training data have NA values.  Charting the number
+of NA values for each variable produces the following graph.
+
+``` {r ExamineNAs}
+na_count <- sapply(training, function(x) sum(length(which(is.na(x)))))
+barchart(na_count)
+```
+
+The above graph show that variables either contain 0 NA's or a very large
+percentage of the values are NA. These variables shall be removed, along with 
+the arbitrary timestamp & window varibles.
+
+``` {r ReduceVariables}
+na_vars <- names(na_count[na_count!=0])
+dropVars <- c("raw_timestamp_part1","raw_timestamp_part2","cvtd_timestamp",
+              "num_window", na_vars)
+training <- training[,!(names(training) %in% dropVars)]
+```
+
+The predictors shall be further reduced by eliminating variables with near zero
+variance.
+
+``` {r RemoveZeroVar}
+zeroVar <- nearZeroVar(training)
+training <- training[,-zeroVar]
+```
+
+This leaves `r ncol(training)-1` prediction variable to use in modeling.
+
+#Model
+A random forrest model will be used, due to its reputation for high accuracy
+with categorical results.  Repeated k-fold cross-validation is used in 
+building the model.  Due to the large sample size of the training data, a small
+number of folds & repeats can be used without much consequence.  3 folds will be
+used and repeated 3 times.
+
+```{r Model, cache=T}
+library(doParallel)
+registerDoParallel(cores=3)
+fitControl <- trainControl(method = "repeatedcv", number=3, repeats = 3)
+modelFitRF <- train(classe ~ ., data=training, method="rf",
+                    trControl = fitControl)
+errRatetrain <- as.numeric(1 - modelFitRF$result$Accuracy[2])
+modelFitRF
+plot(modelFitRF$finalModel)
+```
+
+The insample error rate of the final model selected is `r errRatetrain*100`%. 
+
+##Model Testing
+```{r TestModel, cache=T}
+testResults <- predict(modelFitRF,testing)
+testConfMat <- confusionMatrix(testResults,testing$classe)
+errRatetest <- as.numeric(1-testConfMat$overall[1])
+testConfMat
+```
+
+The above confustion matrix show the resluts of our model predictions.  With an
+error rate of `r errRatetest*100`%, the estimated out of sample error is smaller
+than the insample error.
+
+#Submission Test
+Finally, the above model will be used to predict answers on the provided testing
+data for the submission assignment.
+
+```{r GetTestData, cache=T}
+if (!file.exists("pml-training.csv")) {
+download.file(
+    url="https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+    "pml-testing.csv")
+}
+pmltesting <- read.csv("pml-testing.csv", row.names=1, na.strings="#DIV/0!")
+for (i in 7:158) {
+    pmltesting[,i] <- as.numeric(pmltesting[,i])
+}
+finalTest <- predict(modelFitRF,pmltesting)
+finalTest
+```
+
+The above predictions resulted in 100% accuracy when submitted.
